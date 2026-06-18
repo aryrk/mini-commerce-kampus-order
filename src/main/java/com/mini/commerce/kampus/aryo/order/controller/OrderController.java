@@ -39,8 +39,11 @@ public class OrderController {
     }
 
     @GetMapping
-    public ResponseEntity<List<DetailOrderResponse>> getAllOrder() {
-        List<DetailOrderResponse> response = orderService.getAllOrder();
+    public ResponseEntity<List<DetailOrderResponse>> getAllOrder(
+        @RequestParam(defaultValue = "0") int page,
+        @RequestParam(defaultValue = "10") int size
+    ) {
+        List<DetailOrderResponse> response = orderService.getAllOrder(page, size);
         return ResponseEntity.ok(response);
     }
 

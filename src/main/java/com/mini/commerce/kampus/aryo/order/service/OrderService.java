@@ -4,6 +4,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
 import com.mini.commerce.kampus.aryo.order.dto.CancelOrder.CancelOrderResponse;
@@ -61,10 +64,11 @@ public class OrderService {
         return orderMapper.toCreateOrderResponse(order);
     }
 
-    public List<DetailOrderResponse> getAllOrder() {
-        return orderRepository.findAll().stream()
-                .map(orderMapper::toDetailOrderResponse)
-                .toList();
+    public List<DetailOrderResponse> getAllOrder(int page, int size) {
+        Pageable pageable = PageRequest.of(page, size);
+        Page<Order> orderPage = orderRepository.findAll(pageable);
+
+        return orderPage.map(orderMapper::toDetailOrderResponse).toList();
     }
 
     public DetailOrderResponse getOrderById(UUID orderId) {
