@@ -46,4 +46,10 @@ public class Order {
 
     @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<OrderItems> items = new ArrayList<>();
+
+    public void calculateTotalAmount() {
+        this.totalAmount = this.items.stream()
+                .map(item -> item.getProductPrice().multiply(BigDecimal.valueOf(item.getQuantity())))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
 }

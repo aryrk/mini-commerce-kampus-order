@@ -1,6 +1,5 @@
 package com.mini.commerce.kampus.aryo.order.service;
 
-import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -8,15 +7,17 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 
 import com.mini.commerce.kampus.aryo.order.dto.CancelOrder.CancelOrderResponse;
+import com.mini.commerce.kampus.aryo.order.dto.CatalogService.product.ProductDetailResponse;
 import com.mini.commerce.kampus.aryo.order.dto.CreateOrder.CreateOrderRequest;
 import com.mini.commerce.kampus.aryo.order.dto.CreateOrder.CreateOrderResponse;
-import com.mini.commerce.kampus.aryo.order.dto.DetailOrder.DetailOrderItemListResponse;
 import com.mini.commerce.kampus.aryo.order.dto.DetailOrder.DetailOrderResponse;
 import com.mini.commerce.kampus.aryo.order.dto.PayOrder.PayOrderResponse;
 import com.mini.commerce.kampus.aryo.order.entity.Order;
 import com.mini.commerce.kampus.aryo.order.entity.OrderItems;
 import com.mini.commerce.kampus.aryo.order.enums.OrderStatus;
-import com.mini.commerce.kampus.aryo.order.repository.OrderItemsRepository;
+import com.mini.commerce.kampus.aryo.order.enums.ProductStatus;
+import com.mini.commerce.kampus.aryo.order.exception.BusinessException;
+import com.mini.commerce.kampus.aryo.order.mapper.OrderMapper;
 import com.mini.commerce.kampus.aryo.order.repository.OrderRepository;
 
 import jakarta.transaction.Transactional;
@@ -26,25 +27,22 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class OrderService {
     private final OrderRepository orderRepository;
-    private final OrderItemsRepository orderItemsRepository;
     private final CatalogClientService catalogClientService;
 
+    private final OrderMapper orderMapper;
+
     @Transactional
-    public CreateOrderResponse createOrder(CreateOrderRequest payload){
+    public CreateOrderResponse createOrder(CreateOrderRequest payload) {
         Order order = new Order();
         order.setCustomerName(payload.getCustomerName());
         order.setCustomerEmail(payload.getCustomerEmail());
 
-        BigDecimal totalPrice = BigDecimal.ZERO;
-
         List<OrderItems> orderItems = new ArrayList<>();
-        for (var item : payload.getItems()) {
+        for (final var item : payload.getItems()) {
             UUID productId = item.getProductId();
             var product = catalogClientService.getProductDetailById(productId);
 
-            if (product == null || product.getStock() < item.getQuantity() || !product.getStatus().equals("ACTIVE")) {
-                throw new RuntimeException("Product not available");
-            }
+            validateProductAvailability(product, item.getQuantity());
 
             OrderItems orderItem = new OrderItems();
             orderItem.setOrder(order);
@@ -55,103 +53,69 @@ public class OrderService {
             orderItems.add(orderItem);
 
             catalogClientService.reduceProductStock(productId, item.getQuantity());
-            totalPrice = totalPrice.add(product.getPrice().multiply(BigDecimal.valueOf(item.getQuantity())));
         }
         order.setItems(orderItems);
-        order.setTotalAmount(totalPrice);
+        order.calculateTotalAmount();
         orderRepository.save(order);
 
-        return CreateOrderResponse.builder()
-                .id(order.getId())
-                .status(order.getStatus())
-                .totalAmount(order.getTotalAmount())
-                .build();
+        return orderMapper.toCreateOrderResponse(order);
     }
 
     public List<DetailOrderResponse> getAllOrder() {
-        List<Order> orders = orderRepository.findAll();
-        List<DetailOrderResponse> response = new ArrayList<>();
-
-        for (var order : orders) {
-            List<DetailOrderItemListResponse> items = new ArrayList<>();
-            for (var item : order.getItems()) {
-                items.add(DetailOrderItemListResponse.builder()
-                        .id(item.getId())
-                        .productId(item.getProductId())
-                        .productName(item.getProductName())
-                        .productPrice(item.getProductPrice())
-                        .quantity(item.getQuantity())
-                        .build());
-            }
-            response.add(DetailOrderResponse.builder()
-                    .id(order.getId())
-                    .customerName(order.getCustomerName())
-                    .customerEmail(order.getCustomerEmail())
-                    .items(items)
-                    .build());
-        }
-        return response;
+        return orderRepository.findAll().stream()
+                .map(orderMapper::toDetailOrderResponse)
+                .toList();
     }
 
     public DetailOrderResponse getOrderById(UUID orderId) {
         Order order = orderRepository.findById(orderId)
-                .orElseThrow(() -> new RuntimeException("Order not found"));
+                .orElseThrow(() -> new BusinessException("Order not found"));
 
-        List<DetailOrderItemListResponse> items = new ArrayList<>();
-        for (var item : order.getItems()) {
-            items.add(DetailOrderItemListResponse.builder()
-                    .id(item.getId())
-                    .productId(item.getProductId())
-                    .productName(item.getProductName())
-                    .productPrice(item.getProductPrice())
-                    .quantity(item.getQuantity())
-                    .build());
-        }
-        return DetailOrderResponse.builder()
-                .id(order.getId())
-                .customerName(order.getCustomerName())
-                .customerEmail(order.getCustomerEmail())
-                .items(items)
-                .build();
+        return orderMapper.toDetailOrderResponse(order);
     }
 
+    @Transactional
     public PayOrderResponse payOrder(UUID orderId) {
         Order order = orderRepository.findById(orderId)
-                .orElseThrow(() -> new RuntimeException("Order not found"));
+                .orElseThrow(() -> new BusinessException("Order not found"));
 
         if (!order.getStatus().equals(OrderStatus.PENDING)) {
-            throw new RuntimeException("Order cannot be paid");
+            throw new BusinessException("Order cannot be paid");
         }
 
         order.setStatus(OrderStatus.PAID);
-        orderRepository.save(order);
 
-        return PayOrderResponse.builder()
-                .id(order.getId())
-                .status(order.getStatus())
-                .totalAmount(order.getTotalAmount())
-                .build();
+        return orderMapper.toPayOrderResponse(order);
     }
 
+    @Transactional
     public CancelOrderResponse cancelOrder(UUID orderId) {
         Order order = orderRepository.findById(orderId)
-                .orElseThrow(() -> new RuntimeException("Order not found"));
+                .orElseThrow(() -> new BusinessException("Order not found"));
 
         if (!order.getStatus().equals(OrderStatus.PENDING)) {
-            throw new RuntimeException("Order cannot be cancelled");
+            throw new BusinessException("Order cannot be cancelled");
         }
 
         order.setStatus(OrderStatus.CANCELLED);
-        orderRepository.save(order);
 
-        for (var item : order.getItems()) {
+        for (final var item : order.getItems()) {
             catalogClientService.increaseProductStock(item.getProductId(), item.getQuantity());
         }
 
-        return CancelOrderResponse.builder()
-                .id(order.getId())
-                .status(order.getStatus())
-                .totalAmount(order.getTotalAmount())
-                .build();
+        return orderMapper.toCancelOrderResponse(order);
+    }
+
+    private void validateProductAvailability(ProductDetailResponse product, int requestedQuantity) {
+        if (product == null) {
+            throw new BusinessException("Product does not exist in the catalog");
+        }
+        if (!product.getStatus().equals(ProductStatus.ACTIVE)) {
+            throw new BusinessException("Product " + product.getName() + " is currently inactive");
+        }
+        if (product.getStock() < requestedQuantity) {
+            throw new BusinessException(
+                    "Insufficient stock for " + product.getName() + ". Available: " + product.getStock());
+        }
     }
 }
